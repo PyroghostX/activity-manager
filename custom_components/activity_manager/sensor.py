@@ -54,6 +54,7 @@ class ActivityManager:
         self.activities = {}
         self.entry = entry
 
+
     async def async_add_activity(
         self, name, category, frequency, icon=None, last_completed=None, context=None
     ):
@@ -62,9 +63,14 @@ class ActivityManager:
 
         if icon is None:
             icon = "mdi:checkbox-outline"
-
+            
+        # Handle both string and array formats for name
+        names = name if isinstance(name, list) else [name]
+        
         item = {
-            "name": name,
+            "name": names[0],  # For backward compatibility
+            "names": names,
+            "current_name_index": 0,
             "category": category,
             "id": uuid.uuid4().hex,
             "last_completed": last_completed,
@@ -124,8 +130,12 @@ class ActivityManager:
         item = next((itm for itm in self.items if itm["id"] == item_id), None)
 
         if last_completed:
+            # Cycle to the next name when completing the activity
+            if "names" in item and len(item["names"]) > 1:
+                item["current_name_index"] = (item["current_name_index"] + 1) % len(item["names"])
             item["last_completed"] = last_completed
 
+        # Rest of the existing code remains the same
         if category:
             item["category"] = category
 
@@ -247,7 +257,11 @@ class ActivityEntity(SensorEntity):
     @property
     def name(self) -> str:
         """Return the name of the sensor."""
-        return self._activity["name"]
+        if "names" in self._activity and len(self._activity["names"]) > 0:
+            index = self._activity.get("current_name_index", 0)
+            return self._activity["names"][index]
+        # Backward compatibility for old format
+        return self._activity.get("name", "")
 
     @property
     def state(self):

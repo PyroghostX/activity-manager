@@ -4,14 +4,23 @@ add_activity:
   fields:
     name:
       name: Name
-      description: The name of the item to add.
-      required: true
+      description: The name of the item to add (use names field for multiple alternating names).
+      required: false  # Changed from true to false
       example: Running
       selector:
         text:
+    names:
+      name: Names
+      description: Multiple names that will cycle each time the activity is completed.
+      required: false
+      example: ["John's turn", "Mary's turn"]
+      selector:
+        object:  # This allows for a list of strings
+    # At least one of name or names must be provided
+    # Other fields remain the same
     category:
       name: Category
-      description: The name of the item to add.
+      description: The category of the activity.
       required: true
       example: Workout
       selector:
@@ -36,6 +45,27 @@ add_activity:
       selector:
         icon:
 
+remove_name:
+  name: Remove Name
+  description: Remove a name from an activity's name list.
+  fields:
+    entity_id:
+      name: Entity ID
+      description: The id of the entity to update
+      required: true
+      selector:
+        entity:
+          filter:
+            - integration: "activity_manager"
+    index:
+      name: Index
+      description: The index of the name to remove
+      required: true
+      selector:
+        number:
+          min: 0
+          mode: box
+          
 remove_activity:
   name: Remove Activity
   description: Remove the first item with matching name from the list.

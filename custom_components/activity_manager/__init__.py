@@ -67,10 +67,33 @@ async def async_setup_entry(
         else:
             last_completed = dt.now().isoformat()
 
+        # Handle both string and list formats for name
         await data.async_add_activity(
             name, category, frequency_str, icon=icon, last_completed=last_completed
         )
 
+    async def add_name_to_activity_service(call: ServiceCall) -> None:
+        """Add a name to an activity's name list."""
+        data = hass.data[DOMAIN]
+        entity_id = call.data.get("entity_id")
+        new_name = call.data.get("name")
+        
+        if entity_id and new_name:
+            entity_registry = async_get(hass)
+            entity = entity_registry.entities.get(entity_id)
+            if entity:
+                item = next((itm for itm in data.items if itm["id"] == entity.unique_id), None)
+                if item:
+                    if "names" not in item:
+                        # Migrate from old format
+                        item["names"] = [item.get("name", "")]
+                        item["current_name_index"] = 0
+                    
+                    item["names"].append(new_name)
+                    await data.update_entities()
+
+    hass.services.async_register(DOMAIN, "add_name", add_name_to_activity_service)
+    
     async def remove_item_service(call: ServiceCall) -> None:
         data = hass.data[DOMAIN]
 
@@ -81,6 +104,38 @@ async def async_setup_entry(
             entity = entity_registry.entities.get(entity_id)
             if entity:
                 await data.async_remove_activity(entity.unique_id)
+
+    async def remove_name_service(call: ServiceCall) -> None:
+        """Remove a name from an activity's name list."""
+        data = hass.data[DOMAIN]
+        entity_id = call.data.get("entity_id")
+        index = call.data.get("index")
+        
+        if entity_id is not None and index is not None:
+            entity_registry = async_get(hass)
+            entity = entity_registry.entities.get(entity_id)
+            if entity:
+                item = next((itm for itm in data.items if itm["id"] == entity.unique_id), None)
+                if item and "names" in item and 0 <= index < len(item["names"]):
+                    # Don't remove the last name
+                    if len(item["names"]) <= 1:
+                        return
+                    
+                    # Update current_name_index if necessary
+                    if index <= item.get("current_name_index", 0) and item.get("current_name_index", 0) > 0:
+                        item["current_name_index"] -= 1
+                    
+                    # Remove the name
+                    item["names"].pop(index)
+                    await data.update_entities()
+                    
+                    # Fire event for UI update
+                    hass.bus.async_fire(
+                        "activity_manager_updated",
+                        {"action": "name_removed", "item": item},
+                    )
+
+    hass.services.async_register(DOMAIN, "remove_name", remove_name_service)
 
     async def update_item_service(call: ServiceCall) -> None:
         data = hass.data[DOMAIN]

@@ -57,20 +57,61 @@ async def async_setup_entry(
         data = hass.data[DOMAIN]
 
         name = call.data.get("name")
+        names = call.data.get("names")
         category = call.data.get("category")
         frequency_str = call.data.get("frequency")
         last_completed = call.data.get("last_completed")
         icon = call.data.get("icon")
+
+        # If names is provided, use it; otherwise use name as a single-item list
+        names_to_use = names if names else ([name] if name else [])
 
         if last_completed:
             last_completed = dt_as_local(last_completed)
         else:
             last_completed = dt.now().isoformat()
 
-        # Handle both string and list formats for name
         await data.async_add_activity(
-            name, category, frequency_str, icon=icon, last_completed=last_completed
+            names_to_use, category, frequency_str, icon=icon, last_completed=last_completed
         )
+
+    async def remove_item_service(call: ServiceCall) -> None:
+        data = hass.data[DOMAIN]
+
+        entity_id = call.data.get("entity_id")
+
+        if entity_id:
+            entity_registry = async_get(hass)
+            entity = entity_registry.entities.get(entity_id)
+            if entity:
+                await data.async_remove_activity(entity.unique_id)
+
+    async def update_item_service(call: ServiceCall) -> None:
+        data = hass.data[DOMAIN]
+        entity_id = call.data.get("entity_id")
+        last_completed = call.data.get("last_completed")
+        category = call.data.get("category")
+        now = call.data.get("now")
+        frequency = call.data.get("frequency")
+        icon = call.data.get("icon")
+
+        if last_completed:
+            last_completed = dt_as_local(last_completed)
+
+        if now:
+            last_completed = dt.now().isoformat()
+
+        if entity_id:
+            entity_registry = async_get(hass)
+            entity = entity_registry.entities.get(entity_id)
+            if entity:
+                await data.async_update_activity(
+                    entity.unique_id,
+                    last_completed=last_completed,
+                    category=category,
+                    frequency=frequency,
+                    icon=icon,
+                )
 
     async def add_name_to_activity_service(call: ServiceCall) -> None:
         """Add a name to an activity's name list."""
@@ -91,19 +132,12 @@ async def async_setup_entry(
                     
                     item["names"].append(new_name)
                     await data.update_entities()
-
-    hass.services.async_register(DOMAIN, "add_name", add_name_to_activity_service)
-    
-    async def remove_item_service(call: ServiceCall) -> None:
-        data = hass.data[DOMAIN]
-
-        entity_id = call.data.get("entity_id")
-
-        if entity_id:
-            entity_registry = async_get(hass)
-            entity = entity_registry.entities.get(entity_id)
-            if entity:
-                await data.async_remove_activity(entity.unique_id)
+                    
+                    # Fire event for UI update
+                    hass.bus.async_fire(
+                        "activity_manager_updated",
+                        {"action": "name_added", "item": item},
+                    )
 
     async def remove_name_service(call: ServiceCall) -> None:
         """Remove a name from an activity's name list."""
@@ -135,38 +169,11 @@ async def async_setup_entry(
                         {"action": "name_removed", "item": item},
                     )
 
-    hass.services.async_register(DOMAIN, "remove_name", remove_name_service)
-
-    async def update_item_service(call: ServiceCall) -> None:
-        data = hass.data[DOMAIN]
-        entity_id = call.data.get("entity_id")
-        last_completed = call.data.get("last_completed")
-        category = call.data.get("category")
-        now = call.data.get("now")
-        frequency = call.data.get("frequency")
-        icon = call.data.get("icon")
-
-        if last_completed:
-            last_completed = dt_as_local(last_completed)
-
-        if now:
-            last_completed = dt.now().isoformat()
-
-        if entity_id:
-            entity_registry = async_get(hass)
-            entity = entity_registry.entities.get(entity_id)
-            if entity:
-                await data.async_update_activity(
-                    entity.unique_id,
-                    last_completed=last_completed,
-                    category=category,
-                    frequency=frequency,
-                    icon=icon,
-                )
-
     hass.services.async_register(DOMAIN, "add_activity", add_item_service)
     hass.services.async_register(DOMAIN, "remove_activity", remove_item_service)
     hass.services.async_register(DOMAIN, "update_activity", update_item_service)
+    hass.services.async_register(DOMAIN, "add_name", add_name_to_activity_service)
+    hass.services.async_register(DOMAIN, "remove_name", remove_name_service)
 
     @callback
     @websocket_api.websocket_command(

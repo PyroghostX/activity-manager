@@ -54,7 +54,6 @@ class ActivityManager:
         self.activities = {}
         self.entry = entry
 
-
     async def async_add_activity(
         self, name, category, frequency, icon=None, last_completed=None, context=None
     ):
@@ -63,7 +62,7 @@ class ActivityManager:
 
         if icon is None:
             icon = "mdi:checkbox-outline"
-            
+
         # Handle both string and array formats for name
         names = name if isinstance(name, list) else [name]
         
@@ -135,7 +134,6 @@ class ActivityManager:
                 item["current_name_index"] = (item["current_name_index"] + 1) % len(item["names"])
             item["last_completed"] = last_completed
 
-        # Rest of the existing code remains the same
         if category:
             item["category"] = category
 
@@ -187,6 +185,11 @@ class ActivityManager:
 
                 # Set frequency_ms
                 item["frequency_ms"] = self._duration_to_ms(item["frequency"])
+
+                # Add names array and current_name_index if they don't exist (for migration)
+                if "names" not in item:
+                    item["names"] = [item.get("name", "")]
+                    item["current_name_index"] = 0
 
                 if "icon" not in item:
                     item["icon"] = "mdi:checkbox-outline"
@@ -291,3 +294,7 @@ class ActivityEntity(SensorEntity):
                 self._attributes["category"] = item["category"]
                 self._attributes["frequency_ms"] = item["frequency_ms"]
                 self._attributes["icon"] = item["icon"]
+                # Update name attribute based on current name index
+                if "names" in item and len(item["names"]) > 0:
+                    index = item.get("current_name_index", 0)
+                    self._attributes["friendly_name"] = item["names"][index]

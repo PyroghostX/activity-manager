@@ -232,16 +232,26 @@ class ActivityEntity(SensorEntity):
         self._config = config
         self._activity = activity
         self._id = self._activity["id"]
+        
+        # Get the first name for entity_id generation
+        first_name = self._activity.get("name", "")
+        if not first_name and "names" in self._activity and len(self._activity["names"]) > 0:
+            first_name = self._activity["names"][0]
+        
+        # Use the ID to ensure unique entity_id even if names are duplicated
         self.entity_id = "sensor." + slugify(
-            self._activity["category"] + "_" + self._activity["name"]
+            self._activity["category"] + "_" + first_name + "_" + self._id[:8]
         )
+        
         self._attributes = {
             "category": self._activity["category"],
             "last_completed": self._activity["last_completed"],
             "frequency_ms": self._activity["frequency_ms"],
-            "friendly_name": self._activity["name"],
+            "friendly_name": self.name,
             "id": self._activity["id"],
             "integration": DOMAIN,
+            "names": self._activity.get("names", [first_name]),
+            "current_name_index": self._activity.get("current_name_index", 0)
         }
 
     @property

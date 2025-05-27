@@ -63,8 +63,18 @@ async def async_setup_entry(
         last_completed = call.data.get("last_completed")
         icon = call.data.get("icon")
 
-        # If names is provided, use it; otherwise use name as a single-item list
-        names_to_use = names if names else ([name] if name else [])
+        # Handle different input formats:
+        # 1. If names array is provided, use it
+        # 2. If name is a list (from frontend parsing comma-separated), use it
+        # 3. If name is a string, wrap it in a list
+        if names:
+            names_to_use = names
+        elif isinstance(name, list):
+            names_to_use = name
+        elif name:
+            names_to_use = [name]
+        else:
+            names_to_use = ["Unnamed Activity"]
 
         if last_completed:
             last_completed = dt_as_local(last_completed)
@@ -123,7 +133,9 @@ async def async_setup_entry(
             entity_registry = async_get(hass)
             entity = entity_registry.entities.get(entity_id)
             if entity:
-                item = next((itm for itm in data.items if itm["id"] == entity.unique_id), None)
+                # Use the unique_id which is stable
+                item_id = entity.unique_id
+                item = next((itm for itm in data.items if itm["id"] == item_id), None)
                 if item:
                     if "names" not in item:
                         # Migrate from old format
@@ -132,6 +144,13 @@ async def async_setup_entry(
                     
                     item["names"].append(new_name)
                     await data.update_entities()
+                    
+                    # Force entity update
+                    await hass.services.async_call(
+                        "homeassistant",
+                        "update_entity",
+                        {"entity_id": entity_id},
+                    )
                     
                     # Fire event for UI update
                     hass.bus.async_fire(
@@ -149,7 +168,8 @@ async def async_setup_entry(
             entity_registry = async_get(hass)
             entity = entity_registry.entities.get(entity_id)
             if entity:
-                item = next((itm for itm in data.items if itm["id"] == entity.unique_id), None)
+                item_id = entity.unique_id
+                item = next((itm for itm in data.items if itm["id"] == item_id), None)
                 if item and "names" in item and 0 <= index < len(item["names"]):
                     # Don't remove the last name
                     if len(item["names"]) <= 1:
@@ -158,10 +178,20 @@ async def async_setup_entry(
                     # Update current_name_index if necessary
                     if index <= item.get("current_name_index", 0) and item.get("current_name_index", 0) > 0:
                         item["current_name_index"] -= 1
+                    elif index == item.get("current_name_index", 0) and index == len(item["names"]) - 1:
+                        # If removing the current name and it's the last one, go to previous
+                        item["current_name_index"] = len(item["names"]) - 2
                     
                     # Remove the name
                     item["names"].pop(index)
                     await data.update_entities()
+                    
+                    # Force entity update
+                    await hass.services.async_call(
+                        "homeassistant",
+                        "update_entity",
+                        {"entity_id": entity_id},
+                    )
                     
                     # Fire event for UI update
                     hass.bus.async_fire(

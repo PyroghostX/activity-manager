@@ -313,10 +313,35 @@ async def async_setup_entry(
         )
         connection.send_message(websocket_api.result_message(msg_id, item))
 
+    # Home Assistant only lets admins subscribe to custom events directly,
+    # so forward activity_manager_updated through our own command instead.
+    @callback
+    @websocket_api.websocket_command(
+        {vol.Required("type"): "activity_manager/subscribe"}
+    )
+    def websocket_handle_subscribe(
+        hass: HomeAssistant,
+        connection: websocket_api.ActiveConnection,
+        msg: dict[str, Any],
+    ) -> None:
+        """Push activity changes to any logged-in user."""
+
+        @callback
+        def forward_update(event) -> None:
+            connection.send_message(
+                websocket_api.event_message(msg["id"], event.data)
+            )
+
+        connection.subscriptions[msg["id"]] = hass.bus.async_listen(
+            "activity_manager_updated", forward_update
+        )
+        connection.send_result(msg["id"])
+
     websocket_api.async_register_command(hass, websocket_handle_items)
     websocket_api.async_register_command(hass, websocket_handle_add)
     websocket_api.async_register_command(hass, websocket_handle_update)
     websocket_api.async_register_command(hass, websocket_handle_remove)
+    websocket_api.async_register_command(hass, websocket_handle_subscribe)
 
     return True
 

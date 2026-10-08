@@ -67,3 +67,13 @@ data:
 -   Activities are stored in .activities_list.json in your `<config>` folder
 -   An entity is created for each activity (e.g. `sensor.<category>_<activity>`). The state of the activity is the datetime of when the activity is due. You can use this entity to build notifications or your own custom cards.
 -   Three services are exposed: `activity_manager.add_activity`, `activity_manager.update_activity`, `activity_manager.remove_activity`. The update activity can be used to reset the timer.
+-   `activity_manager.update_activity` takes an optional `completed_by` (a `person.*` entity). Without it the completion counts as done by whoever's turn it was.
+-   `activity_manager.edit_activity` edits or corrects an activity (names, category, frequency, icon, last completed, and the sharing fields below). It is never a completion: names don't cycle and nothing is added to the history.
+
+### Shared tasks
+
+An activity can be shared by several people (`assignees`, person entity ids). `rotation` is `alternate` (take turns following `turn_order`, which may repeat people), `fixed` (always the first in `turn_order`) or `anyone`. When the person whose turn it is does it, the turn moves on; when someone else covers, the turn stays, so that person gets the next one. If a shared task is still not done `escalate_after` (default 24 hours) after it was due, it goes to everyone until done. Each sensor has the attributes `assignees`, `rotation`, `turn_order`, `turn_index`, `turn`, `assigned_to`, `escalated`, `escalate_after` and `last_completed_by`, and an `activity_manager_updated` event with `action: escalated` fires when a task escalates.
+
+### History
+
+Every completion (card, services, Node-RED) is kept in `.activities_history.json` in your `<config>` folder, outside the recorder database, with who did it, whose turn it was and whether it had escalated. Removed tasks keep their history. On first start the file is seeded with each activity's last completion. The card shows it in the edit dialog; the websocket command `activity_manager/history` (`item_id` and `limit` optional) returns it newest first.

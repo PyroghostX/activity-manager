@@ -102,6 +102,108 @@ update_activity:
       required: false
       selector:
         icon:
+    completed_by:
+      name: Completed by
+      description: Person who did it. Leave it out when unknown; the turn then moves on as if the person whose turn it was did it.
+      required: false
+      selector:
+        entity:
+          filter:
+            - domain: person
+
+edit_activity:
+  name: Edit Activity
+  description: Edit or correct an activity. This is never a completion, so names don't cycle, turns don't move (unless you set them) and nothing is added to the history.
+  fields:
+    entity_id:
+      name: Entity ID
+      description: The activity to edit
+      required: true
+      selector:
+        entity:
+          filter:
+            - integration: "activity_manager"
+    names:
+      name: Names
+      description: All names of the task, used in order one completion after another
+      required: false
+      example: ["Cat water filter: Clean", "Cat water filter: Replace"]
+      selector:
+        text:
+          multiple: true
+    category:
+      name: Category
+      required: false
+      example: Home
+      selector:
+        text:
+    frequency:
+      name: Frequency
+      description: How often the task is due
+      required: false
+      selector:
+        duration:
+          enable_day: true
+    icon:
+      name: Icon
+      required: false
+      selector:
+        icon:
+    last_completed:
+      name: Last Completed
+      description: Correct the last completed time (not a completion)
+      required: false
+      selector:
+        datetime:
+    assignees:
+      name: Who does it
+      description: People who share the task. An empty list makes it an ordinary task again.
+      required: false
+      selector:
+        entity:
+          multiple: true
+          filter:
+            - domain: person
+    rotation:
+      name: Rotation
+      description: alternate = take turns, fixed = always the first person in the turn order, anyone = everyone all the time
+      required: false
+      selector:
+        select:
+          options:
+            - alternate
+            - fixed
+            - anyone
+    turn_order:
+      name: Turn order
+      description: The turn pattern; repeats are allowed, e.g. [person.alex, person.alex, person.sam]. Defaults to the assignees in order.
+      required: false
+      example: ["person.alex", "person.alex", "person.sam"]
+      selector:
+        object:
+    next_person:
+      name: Next up
+      description: Person whose turn it is now
+      required: false
+      selector:
+        entity:
+          filter:
+            - domain: person
+    turn_index:
+      name: Turn index
+      description: Position in the turn order whose turn it is now (next_person is easier)
+      required: false
+      selector:
+        number:
+          min: 0
+          mode: box
+    escalate_after:
+      name: Give it to everyone after
+      description: How long after the due time an undone task goes to all assignees. Defaults to 24 hours for 2 or more people; null means never.
+      required: false
+      selector:
+        duration:
+          enable_day: true
 
 add_name:
   name: Add Name

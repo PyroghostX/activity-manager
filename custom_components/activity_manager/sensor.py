@@ -21,6 +21,8 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.const import UnitOfTemperature
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity import generate_entity_id
+from homeassistant.helpers import device_registry as dr
+from homeassistant.helpers.event import async_track_time_interval
 from homeassistant.helpers.entity_registry import async_get
 from homeassistant.helpers.json import save_json
 from homeassistant.helpers.typing import ConfigType, DiscoveryInfoType
@@ -36,6 +38,12 @@ PERSISTENCE = ".activities_list.json"
 # Permanent completion log, kept outside the recorder database
 HISTORY = ".activities_history.json"
 
+# Phone alerts: one notification per task, replaced/cleared by its tag
+NOTIFY_TAG = "activity_manager_"
+ACTION_DONE = "AM_DONE_"
+ACTION_SNOOZE = "AM_SNOOZE_"
+NOTIFY_CHECK = timedelta(minutes=1)
+
 
 async def async_setup_entry(hass, config_entry, async_add_devices):
     data = hass.data[DOMAIN] = ActivityManager(hass, config_entry, async_add_devices)
@@ -47,6 +55,7 @@ async def async_setup_entry(hass, config_entry, async_add_devices):
         activities.append(ActivityEntity(hass, config_entry, item))
 
     async_add_devices(activities, True)
+    data.async_start_notifier()
 
 
 class ActivityManager:
@@ -132,6 +141,7 @@ class ActivityManager:
         )
 
         self.items.remove(item)
+        await self.async_clear_notification(item)
         if entity:
             entity_registry.async_remove(entity.entity_id)
         await self.update_entities()
@@ -185,6 +195,7 @@ class ActivityManager:
         history_changed = logic.upsert_task(self.history, item, dt.now().isoformat())
         if completion:
             logic.add_completion(self.history, completion)
+            await self.async_clear_notification(item)
         if completion or history_changed:
             await self.async_save_history()
 
@@ -206,6 +217,10 @@ class ActivityManager:
             return None
 
         changed = logic.apply_edit(item, changes)
+        if "notify" in changed or "last_completed" in changed:
+            # Turned off, or a corrected due time: drop the current alert
+            item.pop("notified", None)
+            await self.async_clear_notification(item)
         if changed:
             await self._async_refresh_entity(item_id)
             await self.update_entities()
@@ -227,6 +242,135 @@ class ActivityManager:
         """Pick up a name change made outside the edit/update paths."""
         if logic.upsert_task(self.history, item, dt.now().isoformat()):
             await self.async_save_history()
+
+    # --- Phone alerts ---------------------------------------------------------
+
+    def async_start_notifier(self) -> None:
+        """Check due tasks every minute and handle the alerts' buttons."""
+        self.entry.async_on_unload(
+            async_track_time_interval(self.hass, self._async_check_notifications, NOTIFY_CHECK)
+        )
+        self.entry.async_on_unload(
+            self.hass.bus.async_listen(
+                "mobile_app_notification_action", self._async_notification_action
+            )
+        )
+
+    def _notify_services(self, person) -> list:
+        """notify.mobile_app_* services of the phones tracking `person`."""
+        state = self.hass.states.get(person)
+        if state is None:
+            return []
+        entities = async_get(self.hass)
+        devices = dr.async_get(self.hass)
+        services = []
+        for tracker in state.attributes.get("device_trackers", []):
+            entry = entities.async_get(tracker)
+            if entry is None or entry.platform != "mobile_app" or not entry.device_id:
+                continue
+            device = devices.async_get(entry.device_id)
+            if device is None:
+                continue
+            service = "mobile_app_" + slugify(device.name_by_user or device.name or "")
+            if self.hass.services.has_service("notify", service) and service not in services:
+                services.append(service)
+        return services
+
+    def _people(self) -> list:
+        """Everyone with a phone to alert."""
+        return sorted(
+            state.entity_id
+            for state in self.hass.states.async_all("person")
+            if self._notify_services(state.entity_id)
+        )
+
+    def _display_names(self) -> dict:
+        return {
+            state.entity_id: state.attributes.get("friendly_name", state.entity_id)
+            for state in self.hass.states.async_all("person")
+        }
+
+    def _is_home(self, person) -> bool:
+        state = self.hass.states.get(person)
+        return state is not None and state.state == "home"
+
+    async def _async_check_notifications(self, _now=None) -> None:
+        now = dt.now()
+        people = self._people()
+        names = self._display_names()
+        sent = False
+        for item in list(self.items):
+            for person in logic.notify_targets(item, now, people, self._is_home, now.hour):
+                await self._async_send(item, person, names)
+                sent = True
+        if sent:
+            await self.update_entities()
+
+    async def _async_send(self, item, person, names) -> None:
+        title, message = logic.notification_text(item, person, names)
+        data = {
+            "tag": NOTIFY_TAG + item["id"],
+            "group": "activity_manager",
+            "actions": [
+                {"action": ACTION_DONE + item["id"], "title": "Completed"},
+                {"action": ACTION_SNOOZE + item["id"], "title": "Snooze 4 hours"},
+            ],
+        }
+        if logic.get_notify(item) == "persistent":
+            # Can't be swiped away; tapping it doesn't dismiss it either
+            data.update(persistent=True, sticky="true")
+        for service in self._notify_services(person):
+            try:
+                await self.hass.services.async_call(
+                    "notify", service, {"title": title, "message": message, "data": data}
+                )
+            except Exception:  # noqa: BLE001 - one phone failing shouldn't stop the rest
+                _LOGGER.exception("Could not send %s to %s", item["id"], service)
+
+    async def async_clear_notification(self, item) -> None:
+        """Remove the task's alert from every phone."""
+        for person in self._people():
+            for service in self._notify_services(person):
+                try:
+                    await self.hass.services.async_call(
+                        "notify",
+                        service,
+                        {"message": "clear_notification", "data": {"tag": NOTIFY_TAG + item["id"]}},
+                    )
+                except Exception:  # noqa: BLE001
+                    _LOGGER.exception("Could not clear %s on %s", item["id"], service)
+
+    async def _async_notification_action(self, event) -> None:
+        action = event.data.get("action") or ""
+        if action.startswith(ACTION_DONE):
+            item = self.get_item(action[len(ACTION_DONE):])
+            if item is None:
+                return
+            # Done by whoever pressed Completed
+            by = next(
+                (
+                    state.entity_id
+                    for state in self.hass.states.async_all("person")
+                    if event.context.user_id
+                    and state.attributes.get("user_id") == event.context.user_id
+                ),
+                None,
+            )
+            await self.async_update_activity(
+                item["id"], last_completed=dt.now().isoformat(), completed_by=by, context=event.context
+            )
+        elif action.startswith(ACTION_SNOOZE):
+            item = self.get_item(action[len(ACTION_SNOOZE):])
+            if item is None:
+                return
+            logic.apply_snooze(item, dt.now())
+            await self.async_clear_notification(item)
+            await self.update_entities()
+            self.hass.bus.async_fire(
+                "activity_manager_updated",
+                {"action": "snoozed", "item": item},
+                context=event.context,
+            )
 
     def get_item(self, item_id):
         return next((itm for itm in self.items if itm["id"] == item_id), None)
@@ -421,7 +565,7 @@ class ActivityEntity(SensorEntity):
                 "escalate_after",
                 "last_completed_by",
             )
-        }
+        } | {"notify": logic.get_notify(item), "snooze_until": item.get("snooze_until")}
 
     async def async_update(self) -> None:
         """Fetch new state data for the sensor.

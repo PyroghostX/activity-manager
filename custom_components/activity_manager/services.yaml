@@ -204,6 +204,16 @@ edit_activity:
       selector:
         duration:
           enable_day: true
+    notify:
+      name: Phone alert
+      description: Alert whoever it's assigned to when it's due (8 AM to 10 PM, while home). Persistent alerts can't be swiped away; both kinds have Completed and Snooze 4 hours.
+      required: false
+      selector:
+        select:
+          options:
+            - "off"
+            - swipe
+            - persistent
 
 add_name:
   name: Add Name

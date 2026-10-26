@@ -27,7 +27,9 @@ _LOGGER = logging.getLogger(__name__)
 PERSISTENCE = ".activities_list.json"
 
 # Sharing fields activity_manager/add accepts on top of the basic ones
-ADD_SHARING_KEYS = ("assignees", "rotation", "turn_order", "turn_index", "next_person", "escalate_after")
+ADD_SHARING_KEYS = (
+    "assignees", "rotation", "turn_order", "turn_index", "next_person", "escalate_after", "notify",
+)
 
 
 def _local_iso(value) -> str:
@@ -339,6 +341,7 @@ async def async_setup_entry(
             vol.Optional("turn_index"): int,
             vol.Optional("next_person"): str,
             vol.Optional("escalate_after"): vol.Any(dict, None),
+            vol.Optional("notify"): vol.In(logic.NOTIFY_MODES),
         }
     )
     @websocket_api.async_response
@@ -452,6 +455,8 @@ async def async_setup_entry(
             vol.Optional("next_person"): str,
             # null = never give it to everyone
             vol.Optional("escalate_after"): vol.Any(dict, None),
+            # Phone alert when due: off / swipe / persistent
+            vol.Optional("notify"): vol.In(logic.NOTIFY_MODES),
         }
     )
     @websocket_api.async_response

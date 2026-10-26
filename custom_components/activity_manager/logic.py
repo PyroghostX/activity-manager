@@ -19,6 +19,12 @@ DEFAULT_ROTATION = "alternate"
 DEFAULT_ESCALATE_AFTER = {"hours": 24}
 SHARING_KEYS = ("assignees", "rotation", "turn_order", "turn_index", "escalate_after")
 
+# Phone notifications when a task is due
+NOTIFY_MODES = ("off", "swipe", "persistent")
+DEFAULT_NOTIFY = "off"
+NOTIFY_HOURS = (8, 22)  # local hours [start, end) when alerts may go out
+SNOOZE = {"hours": 4}
+
 # Fields activity_manager/edit and the edit_activity service accept
 EDIT_KEYS = (
     "names",
@@ -32,6 +38,7 @@ EDIT_KEYS = (
     "turn_index",
     "next_person",
     "escalate_after",
+    "notify",
 )
 
 HISTORY_VERSION = 1
@@ -301,7 +308,76 @@ def apply_completion(item, at, by=None) -> dict:
 
     item["last_completed"] = at
     item["last_completed_by"] = by
+    # A new due time: alerts start over
+    item.pop("snooze_until", None)
+    item.pop("notified", None)
     return entry
+
+
+# --- Notifications -----------------------------------------------------------
+
+
+def get_notify(item) -> str:
+    mode = item.get("notify")
+    return mode if mode in NOTIFY_MODES else DEFAULT_NOTIFY
+
+
+def apply_snooze(item, now) -> str:
+    """Hold the task's alerts for SNOOZE; returns when they resume (ISO)."""
+    until = parse_time(now) + timedelta(milliseconds=duration_to_ms(SNOOZE))
+    item["snooze_until"] = until.isoformat()
+    return item["snooze_until"]
+
+
+def notify_targets(item, now, everyone, is_home, local_hour) -> list:
+    """People to alert about a due task right now.
+
+    Whoever the task is assigned to (everyone once escalated; `everyone` when
+    the task has no assignees), only while they're home and within
+    NOTIFY_HOURS, never while snoozed, and each person once per due time (and
+    once more after each snooze). The people returned are recorded on the item
+    as alerted, so the caller should save the item when this returns anyone.
+    """
+    if get_notify(item) == "off":
+        return []
+    now = parse_time(now)
+    due = due_time(item)
+    if now is None or due is None or now < due:
+        return []
+    snooze = item.get("snooze_until")
+    snooze_time = parse_time(snooze)
+    if snooze_time is not None and now < snooze_time:
+        return []
+    if not NOTIFY_HOURS[0] <= local_hour < NOTIFY_HOURS[1]:
+        return []
+
+    status = compute_status(item, now)
+    people = status["assigned_to"] or list(everyone)
+    key = {"due": due.isoformat(), "snooze": snooze}
+    state = item.get("notified")
+    sent = []
+    if isinstance(state, dict) and all(state.get(k) == v for k, v in key.items()):
+        sent = [p for p in state.get("sent", []) if isinstance(p, str)]
+    targets = [p for p in people if p not in sent and is_home(p)]
+    if targets:
+        item["notified"] = {**key, "sent": sent + targets}
+    return targets
+
+
+def notification_text(item, person, display_names) -> tuple[str, str]:
+    """Title and message for `person`'s alert about a due task."""
+    status = compute_status(item, datetime.now(timezone.utc))
+    turn = status["turn"]
+    turn_name = display_names.get(turn, turn) if turn else None
+    if status["escalated"]:
+        message = f"Overdue ({turn_name}'s turn). Whoever gets to it first."
+    elif turn and turn == person:
+        message = "Your turn."
+    elif turn:
+        message = f"{turn_name}'s turn."
+    else:
+        message = "Due now."
+    return current_name(item), message
 
 
 # --- Edits -----------------------------------------------------------------
@@ -456,6 +532,11 @@ def apply_edit(item, changes) -> list:
             new["escalate_after"] = (
                 None if value is None else validate_duration(value, "escalate_after")
             )
+
+    if "notify" in changes:
+        if changes["notify"] not in NOTIFY_MODES:
+            raise ValueError(f"notify must be one of {', '.join(NOTIFY_MODES)}")
+        new["notify"] = changes["notify"]
 
     changed = sorted(
         key

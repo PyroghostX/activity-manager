@@ -478,6 +478,78 @@ def test_legacy_items():
     assert items[2]["current_name_index"] == 1
 
 
+# --- Notifications -----------------------------------------------------------
+
+
+def _home(*people):
+    return lambda person: person in people
+
+
+def test_notify_off_by_default_and_validated():
+    item = make_item(assignees=[A, B])
+    assert logic.get_notify(item) == "off"
+    due = T0 + timedelta(days=1, hours=1)
+    assert logic.notify_targets(item, due, [A, B], _home(A, B), 12) == []
+    assert logic.apply_edit(item, {"notify": "persistent"}) == ["notify"]
+    try:
+        logic.apply_edit(item, {"notify": "loud"})
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("bad notify mode accepted")
+    assert item["notify"] == "persistent"
+
+
+def test_notify_turn_once_then_escalation_adds_the_other():
+    item = make_item(assignees=[A, B], notify="swipe")
+    before = T0 + timedelta(hours=23)
+    assert logic.notify_targets(item, before, [A, B], _home(A, B), 12) == []
+    due = T0 + timedelta(days=1, minutes=1)
+    assert logic.notify_targets(item, due, [A, B], _home(A, B), 12) == [A]
+    assert logic.notify_targets(item, due, [A, B], _home(A, B), 12) == []  # once
+    escalated = T0 + timedelta(days=2, minutes=2)
+    assert logic.notify_targets(item, escalated, [A, B], _home(A, B), 12) == [B]
+    assert logic.notify_targets(item, escalated, [A, B], _home(A, B), 12) == []
+
+
+def test_notify_quiet_hours_away_and_no_assignees():
+    item = make_item(notify="persistent")
+    due = T0 + timedelta(days=1, minutes=1)
+    assert logic.notify_targets(item, due, [A, B], _home(A, B), 23) == []  # night
+    assert logic.notify_targets(item, due, [A, B], _home(A, B), 7) == []
+    assert logic.notify_targets(item, due, [A, B], _home(B), 8) == [B]  # A is out
+    assert logic.notify_targets(item, due, [A, B], _home(A, B), 9) == [A]  # A got home
+
+
+def test_notify_snooze_and_completion_reset():
+    item = make_item(assignees=[A, B], notify="persistent")
+    due = T0 + timedelta(days=1, minutes=1)
+    assert logic.notify_targets(item, due, [A, B], _home(A, B), 12) == [A]
+    until = logic.apply_snooze(item, iso(due))
+    assert parse(until) == due + timedelta(hours=4)
+    later = due + timedelta(hours=3)
+    assert logic.notify_targets(item, later, [A, B], _home(A, B), 12) == []
+    after = due + timedelta(hours=4, minutes=1)
+    assert logic.notify_targets(item, after, [A, B], _home(A, B), 12) == [A]  # again
+
+    complete(item, A, after)
+    assert "snooze_until" not in item and "notified" not in item
+    assert logic.notify_targets(item, after, [A, B], _home(A, B), 12) == []  # not due
+    next_due = after + timedelta(days=1, minutes=1)
+    assert logic.notify_targets(item, next_due, [A, B], _home(A, B), 12) == [B]
+
+
+def test_notification_text():
+    names = {A: "Alex", B: "Sam"}
+    item = make_item(assignees=[A, B], last_completed=iso(datetime.now(timezone.utc) - timedelta(hours=25)))
+    assert logic.notification_text(item, A, names) == ("Dishes", "Your turn.")
+    assert logic.notification_text(item, B, names) == ("Dishes", "Alex's turn.")
+    item["last_completed"] = iso(datetime.now(timezone.utc) - timedelta(days=3))
+    assert logic.notification_text(item, B, names)[1] == "Overdue (Alex's turn). Whoever gets to it first."
+    solo = make_item(last_completed=iso(datetime.now(timezone.utc) - timedelta(days=3)))
+    assert logic.notification_text(solo, A, names)[1] == "Due now."
+
+
 def main() -> int:
     tests = [(name, fn) for name, fn in globals().items() if name.startswith("test_")]
     failed = 0
